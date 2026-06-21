@@ -1,0 +1,275 @@
+
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+.wrap{background:#0f1923;border-radius:16px;padding:20px;font-family:'Segoe UI',Arial,sans-serif;}
+canvas{display:block;border-radius:12px;}
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
+.cg{display:flex;align-items:center;gap:8px;background:#1a3450;border-radius:10px;padding:8px 14px;flex:1;min-width:160px;}
+.cg label{font-size:12px;color:#a0b8cc;min-width:60px;}
+.cg input{flex:1;accent-color:#1D9E75;}
+.cg span{font-size:13px;font-weight:700;color:#F3E4C9;min-width:36px;text-align:right;}
+.btn-row{display:flex;gap:8px;margin-top:10px;}
+button{background:#1a3450;border:1px solid #2a5070;color:#F3E4C9;border-radius:8px;padding:7px 18px;font-size:13px;cursor:pointer;}
+button:hover{background:#234a6e;}
+button.on{background:#1D9E75;border-color:#1D9E75;}
+.cards{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;}
+.card{background:#1a3450;border-radius:10px;padding:10px 14px;flex:1;min-width:110px;}
+.card .lbl{font-size:11px;color:#6a8fa8;margin-bottom:3px;}
+.card .val{font-size:22px;font-weight:700;color:#F3E4C9;}
+.card .unit{font-size:11px;color:#6a8fa8;}
+</style>
+
+<div class="wrap">
+  <h2 class="sr-only">สาธิตการเคลื่อนที่ของอิเล็กตรอนในลวดที่ตัดผ่านสนามแม่เหล็ก</h2>
+  <canvas id="c" width="640" height="320"></canvas>
+  <div class="controls">
+    <div class="cg">
+      <label>v (m/s)</label>
+      <input type="range" id="slV" min="0.5" max="4" step="0.1" value="2" oninput="sync()">
+      <span id="oV">2.0</span>
+    </div>
+    <div class="cg">
+      <label>B (T)</label>
+      <input type="range" id="slB" min="0.5" max="4" step="0.1" value="2" oninput="sync()">
+      <span id="oB">2.0</span>
+    </div>
+    <div class="cg">
+      <label>L (m)</label>
+      <input type="range" id="slL" min="0.5" max="2" step="0.1" value="1" oninput="sync()">
+      <span id="oL">1.0</span>
+    </div>
+  </div>
+  <div class="btn-row">
+    <button id="btnP" class="on" onclick="togglePlay()"><i class="ti ti-player-pause" aria-hidden="true"></i> หยุด</button>
+    <button onclick="wireX=fL-60;"><i class="ti ti-refresh" aria-hidden="true"></i> รีเซ็ต</button>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="lbl">EMF (e)</div><div><span class="val" id="dE">4.00</span> <span class="unit">V</span></div></div>
+    <div class="card"><div class="lbl">ความเร็วอิเล็กตรอน</div><div><span class="val" id="dSpd" style="font-size:15px;">กลาง</span></div></div>
+    <div class="card"><div class="lbl">สถานะ</div><div><span class="val" id="dS" style="font-size:13px;color:#1D9E75;">ในสนาม</span></div></div>
+  </div>
+</div>
+
+<script>
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const fL=60,fR=560,fT=30,fB=270;
+const fW=fR-fL, fH=fB-fT;
+let wireX = fL-60;
+let playing = true;
+
+function gV(){ return parseFloat(document.getElementById('slV').value); }
+function gB(){ return parseFloat(document.getElementById('slB').value); }
+function gL(){ return parseFloat(document.getElementById('slL').value); }
+function sync(){
+  document.getElementById('oV').textContent=gV().toFixed(1);
+  document.getElementById('oB').textContent=gB().toFixed(1);
+  document.getElementById('oL').textContent=gL().toFixed(1);
+}
+function togglePlay(){
+  playing=!playing;
+  const b=document.getElementById('btnP');
+  b.innerHTML=playing?'<i class="ti ti-player-pause" aria-hidden="true"></i> หยุด':'<i class="ti ti-player-play" aria-hidden="true"></i> เล่น';
+  b.className=playing?'on':'';
+}
+
+// อิเล็กตรอน: แต่ละตัวมี phase เป็นของตัวเอง (0–1) ใช้ update แยกกัน
+const MAX_E = 12;
+let electrons = [];
+function initElectrons(n, wY1, wY2){
+  electrons = [];
+  for(let i=0;i<n;i++){
+    electrons.push({ phase: i/n }); // กระจาย phase เท่าๆ กัน
+  }
+}
+
+let prevN=0, prevWY1=0, prevWY2=0;
+let lastTs=0;
+
+function draw(ts){
+  const dt = Math.min(ts-lastTs, 50)/1000; // วินาที
+  lastTs=ts;
+
+  const B=gB(), v=gV(), L=gL();
+  const e=(B*L*v).toFixed(2);
+  const inField = wireX>fL+2 && wireX<fR-2;
+
+  // ── electron speed: ขึ้นอยู่กับ B และ v จริงๆ ──
+  // speed = B*v → ยิ่ง B มาก หรือ v เร็ว อิเล็กตรอนยิ่งวิ่งเร็ว
+  const eSpeed = B * v;  // หน่วยสมมติ: cycles/s
+
+  ctx.clearRect(0,0,W,H);
+
+  // field bg
+  ctx.fillStyle='#091825';
+  ctx.beginPath(); ctx.roundRect(fL,fT,fW,fH,8); ctx.fill();
+  ctx.strokeStyle='#1a4060'; ctx.lineWidth=0.8;
+  ctx.beginPath(); ctx.roundRect(fL,fT,fW,fH,8); ctx.stroke();
+
+  // B dots — ขนาดและความสว่างตาม B
+  const cols=10, rows=6;
+  const dsx=fW/(cols+1), dsy=fH/(rows+1);
+  const dotR = 1.5 + B*1.4;
+  for(let r=1;r<=rows;r++){
+    for(let c=1;c<=cols;c++){
+      const dx=fL+c*dsx, dy=fT+r*dsy;
+      ctx.globalAlpha=Math.min(1, 0.35+B*0.16);
+      ctx.fillStyle='#378ADD';
+      ctx.beginPath(); ctx.arc(dx,dy,dotR,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='#B5D4F4';
+      ctx.beginPath(); ctx.arc(dx,dy,dotR*0.35,0,Math.PI*2); ctx.fill();
+    }
+  }
+  ctx.globalAlpha=1;
+
+  // B label
+  ctx.fillStyle='rgba(9,24,40,0.8)';
+  ctx.fillRect(fL+4,fT+4,145,18);
+  ctx.fillStyle='#85B7EB'; ctx.font='11px Arial'; ctx.textAlign='left';
+  ctx.fillText(`B = ${B.toFixed(1)} T  (• ออกจากกระดาษ)`,fL+8,fT+15);
+
+  // wire
+  const wx=Math.max(fL+2,Math.min(fR-2,wireX));
+  const midY=(fT+fB)/2;
+  const lScale=L/2.0;
+  const halfLen=(fH*0.38)*lScale;
+  const wY1=midY-halfLen, wY2=midY+halfLen;
+
+  // glow
+  if(inField){
+    ctx.strokeStyle='rgba(127,119,221,0.15)';
+    ctx.lineWidth=16;
+    ctx.beginPath(); ctx.moveTo(wx,wY1); ctx.lineTo(wx,wY2); ctx.stroke();
+  }
+  ctx.strokeStyle='#7F77DD';
+  ctx.lineWidth=3+L*1.5;
+  ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(wx,wY1); ctx.lineTo(wx,wY2); ctx.stroke();
+  ctx.lineCap='butt';
+
+  ctx.fillStyle='#F3E4C9'; ctx.font='bold 12px Arial'; ctx.textAlign='center';
+  ctx.fillText('P',wx,wY1-8);
+  ctx.fillText('Q',wx,wY2+16);
+
+  // L ruler (ขวาลวด)
+  const rx=wx+22;
+  ctx.strokeStyle='#AFA9EC'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(rx,wY1); ctx.lineTo(rx,wY2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(rx-4,wY1); ctx.lineTo(rx+4,wY1); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(rx-4,wY2); ctx.lineTo(rx+4,wY2); ctx.stroke();
+  ctx.fillStyle='#AFA9EC'; ctx.font='bold 11px Arial'; ctx.textAlign='left';
+  ctx.fillText(`L=${L.toFixed(1)}m`,rx+7,midY+4);
+
+  // v arrow
+  const arrLen=14+v*16;
+  const ay=midY;
+  const ax=wx+50;
+  ctx.strokeStyle='#EF9F27'; ctx.lineWidth=2.5;
+  ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(ax+arrLen,ay); ctx.stroke();
+  ctx.fillStyle='#EF9F27';
+  ctx.beginPath();
+  ctx.moveTo(ax+arrLen,ay-5); ctx.lineTo(ax+arrLen+9,ay); ctx.lineTo(ax+arrLen,ay+5);
+  ctx.fill();
+  ctx.font='bold 12px Arial'; ctx.textAlign='left';
+  ctx.fillText('v',ax+arrLen+12,ay+4);
+
+  // ── อิเล็กตรอน ──
+  if(inField){
+    const wireLen=wY2-wY1;
+    const nE=Math.max(3, Math.round(L*5));
+
+    // reinit ถ้าจำนวนเปลี่ยน หรือ ขนาดลวดเปลี่ยน
+    if(nE!==prevN || Math.abs(wY1-prevWY1)>1){
+      initElectrons(nE, wY1, wY2);
+      prevN=nE; prevWY1=wY1; prevWY2=wY2;
+    }
+
+    // อัปเดต phase ตาม eSpeed (B×v)
+    for(let i=0;i<electrons.length;i++){
+      electrons[i].phase = (electrons[i].phase + eSpeed * dt * 0.25) % 1;
+    }
+
+    // วาดอิเล็กตรอน — เคลื่อนที่จาก Q (ล่าง) ขึ้นไป P (บน)
+    for(let i=0;i<electrons.length;i++){
+      const p = electrons[i].phase;
+      // p=0 อยู่ที่ Q (ล่าง), p=1 อยู่ที่ P (บน)
+      const ey = wY2 - p * wireLen;
+      const jitter = Math.sin(p * Math.PI * 4 + i) * 1.5;
+
+      // trail — ความยาว trail สะท้อน speed
+      const trailLen = Math.min(wireLen * 0.4, 8 + eSpeed * 5);
+      const trailSteps = 8;
+      for(let t=1;t<=trailSteps;t++){
+        const tp = p - (t/trailSteps)*(trailLen/wireLen);
+        if(tp < 0) continue;
+        const ty = wY2 - tp * wireLen;
+        ctx.globalAlpha = (1 - t/trailSteps) * 0.5;
+        ctx.fillStyle='#E24B4A';
+        ctx.beginPath();
+        ctx.arc(wx+jitter, ty, 3*(1-t/trailSteps)+1, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.globalAlpha=1;
+
+      // ตัวอิเล็กตรอน
+      ctx.fillStyle='#E24B4A';
+      ctx.beginPath(); ctx.arc(wx+jitter, ey, 5, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle='#F09595'; ctx.lineWidth=1.5; ctx.stroke();
+      ctx.fillStyle='#fff'; ctx.font='bold 9px Arial'; ctx.textAlign='center';
+      ctx.fillText('−', wx+jitter, ey+3);
+    }
+
+    // EMF label
+    ctx.fillStyle='#1D9E75'; ctx.font='bold 13px Arial'; ctx.textAlign='center';
+    ctx.fillText(`e = ${e} V`, wx, wY2+34);
+
+    // ── speedometer bar (ขวาสุด) ──
+    const barX=fR+28, barY=fT+10, barH=fH-20, barW=14;
+    ctx.fillStyle='#0a1e30';
+    ctx.beginPath(); ctx.roundRect(barX,barY,barW,barH,6); ctx.fill();
+    ctx.strokeStyle='#1a4060'; ctx.lineWidth=0.8;
+    ctx.stroke();
+
+    const maxSpeed=16; // B*v max = 4*4
+    const fillH = Math.min(1, eSpeed/maxSpeed)*barH;
+    const fillY = barY+barH-fillH;
+    // สีเปลี่ยนตามความเร็ว: เขียว→เหลือง→แดง
+    const ratio=Math.min(1, eSpeed/maxSpeed);
+    const r=Math.round(ratio>0.5?(ratio-0.5)*2*220+35:35);
+    const g=Math.round(ratio<0.5?158:158*(1-(ratio-0.5)*2));
+    ctx.fillStyle=`rgb(${r},${g},40)`;
+    ctx.beginPath(); ctx.roundRect(barX,fillY,barW,fillH,4); ctx.fill();
+
+    ctx.fillStyle='#a0b8cc'; ctx.font='10px Arial'; ctx.textAlign='center';
+    ctx.fillText('เร็ว',barX+barW/2,barY-2);
+    ctx.fillText('ช้า',barX+barW/2,barY+barH+12);
+    ctx.fillText('e-',barX+barW/2,barY+barH+22);
+
+    // update cards
+    const lvl = eSpeed<4?'ช้า':eSpeed<8?'กลาง':eSpeed<12?'เร็ว':'เร็วมาก';
+    const col = eSpeed<4?'#85B7EB':eSpeed<8?'#EF9F27':eSpeed<12?'#E24B4A':'#F09595';
+    document.getElementById('dSpd').textContent=lvl;
+    document.getElementById('dSpd').style.color=col;
+    document.getElementById('dS').textContent='ในสนาม';
+    document.getElementById('dS').style.color='#1D9E75';
+  } else {
+    // นอกสนาม: reset
+    if(prevN!==0){ electrons=[]; prevN=0; }
+    document.getElementById('dSpd').textContent='—';
+    document.getElementById('dSpd').style.color='#888';
+    document.getElementById('dS').textContent='นอกสนาม';
+    document.getElementById('dS').style.color='#888';
+  }
+
+  document.getElementById('dE').textContent=e;
+}
+
+function loop(ts){
+  if(playing){ wireX+=gV()*0.8; if(wireX>fR+70) wireX=fL-70; }
+  draw(ts);
+  requestAnimationFrame(loop);
+}
+sync();
+requestAnimationFrame(loop);
+</script>
